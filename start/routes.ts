@@ -22,13 +22,13 @@ import Route from '@ioc:Adonis/Core/Route'
 import { schema, rules } from '@ioc:Adonis/Core/Validator'
 import { v4 as uuid } from 'uuid';
 import Hash from '@ioc:Adonis/Core/Hash';
-import { DateTime } from 'luxon'
+import User from 'App/Models/User';
+import Proposal from 'App/Models/Proposal';
+import { Application } from '@adonisjs/core/build/standalone';
 
-Route.get('/proposals', async () => {
-  return await Database
-  .from('proposals')
-  .select('*')
-  .debug(true)
+Route.get('/proposals', async ({response}) => {
+  const proposals = await Proposal.all()
+  response.ok(proposals)
 })
 
 Route.post('/add-proposal', async ({request, response}) => {
@@ -46,62 +46,91 @@ Route.post('/add-proposal', async ({request, response}) => {
       schema: newProposalSchema
     })
 
-    const proposal = {
-      proposal_id: uuid(),
+    const image = request.file("primaryImgUrl")
+
+    if (image) {
+      await image.moveToDisk('./', {}, "s3")
+    }
+
+  
+
+    const newProposal = {
+      proposalId: uuid(),
       title: payload.proposalName,
       description: payload.proposalDescription,
       category: payload.proposalCategory,
       status: "open",
     }
-
-    await Database
-    .table('proposals')
-    .insert({...proposal})
-    response.ok(payload)
+    const proposal = new Proposal()
+    .fill({...newProposal})
+    .save()
+    response.ok(proposal)
   } catch (error) {
-    console.log(error.messages)
+    console.log(error)
     response.badRequest(error.messages)
   }
 
-  
 })
 
 Route.post('/signup', async ({ request, response }) => {
   const { email, firstName, surname, password } = request.body()
   const hashedPassword = await Hash.make(password)
   const userId = uuid()
-  const existingUser = await  Database
-  .from('users')
-  .where('email_address', email)
+  const existingUser = await User.findBy('email_address', email)
 
-  if (existingUser.length > 0){
+  if (existingUser){
     response.unauthorized("user already exists")
     return
   }
+
+  const user = new User()
   
-  const user = {
-    "first_name": firstName,
-    "surname": surname,
-    "email_address": email,
-    "password": hashedPassword,
-    "user_id": userId,
-    "proposals": [],
-    "jobs": [],
-    "created_at": DateTime.now()
-  }
   try {
-    await Database
-    .table('users')
-    .insert({...user})
+    await user
+    .fill({
+      firstName: firstName,
+      surname: surname,
+      emailAddress: email,
+      password: hashedPassword,
+      userId: userId,
+    })
+    .save()
+    response.ok(user)
+  } 
+  catch(err) {
     response.ok("registration successful")
   }
-  catch(error) {
-    console.log(error.messages)
-    response.badRequest(error.messages)
+})
+
+Route.post('/login', async ({ auth, request, response }) => {
+  const email = request.input('email')
+  const password = request.input('password')
+  try {
+    const user = await auth.use('api').attempt(email, password)
+    response.ok(user)
+  } catch {
+    response.badRequest('Invalid credentials')
+    return
+  }
+
+})
+
+
+Route.get('/auth/verify', async ({ auth, response }) => {
+  try {
+    const user = await auth.use('api').authenticate()
+    response.ok(user)
+  }
+  catch(err){
+    response.unauthorized("user logged out")
   }
 })
-// .middleware(async (ctx, next) => {
-  
-//   await next()
-// })
+
+Route.post('/logout', async ({ auth }) => {
+  await auth.use('api').revoke()
+  return {
+    revoked: true
+  }
+})
+
 
